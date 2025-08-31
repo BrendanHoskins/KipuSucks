@@ -1,0 +1,22 @@
+{
+  "name": "kipusucks-chrome-extension",
+  "version": "1.0.0",
+  "description": "A Chrome extension project",
+  "scripts": {
+    "build": "echo 'Build script - add your build process here'",
+    "dev": "echo 'Development script - add file watching here'",
+    "lint": "echo 'Lint script - add linting tools here'",
+    "test": "echo 'Test script - add testing framework here'"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.254",
+    "eslint": "^8.57.0",
+    "prettier": "^3.1.1"
+  },
+  "author": "",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

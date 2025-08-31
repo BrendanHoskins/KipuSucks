@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KipuSucks - Client Data Extractor</title>
+    <link rel="stylesheet" href="main.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🏥 KipuSucks Client Data Extractor</h1>
+            <p>Extract client data from Kipu occupancy reports</p>
+        </header>
+
+        <main>
+            <div class="card">
+                <h2>Client List Extraction</h2>
+                <p>Click the button below to navigate to Kipu and extract the client list from the occupancy board.</p>
+                
+                <button id="getClientListBtn" class="btn primary">
+                    <span class="btn-text">Get Client List</span>
+                    <span class="btn-loader" style="display: none;">⏳</span>
+                </button>
+
+                <div id="status" class="status"></div>
+            </div>
+
+            <div class="card results-card" id="resultsCard" style="display: none;">
+                <h3>Extracted Client Data</h3>
+                <div id="clientCount" class="client-count"></div>
+                <div id="clientList" class="client-list"></div>
+                <button id="exportBtn" class="btn secondary">Export as JSON</button>
+                <button id="copyBtn" class="btn secondary">Copy to Clipboard</button>
+            </div>
+        </main>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>
