@@ -61,12 +61,21 @@ document.addEventListener('DOMContentLoaded', function() {
                 url: 'https://foundrytreatmentcenter.kipuworks.com/occupancy?p_building=6'
             });
 
-            // Wait for tab to load
+            // Wait for tab to reach the final occupancy page (handling potential sign-in redirect)
             await new Promise((resolve) => {
-                const listener = (tabId, changeInfo) => {
-                    if (tabId === tab.id && changeInfo.status === 'complete') {
-                        chrome.tabs.onUpdated.removeListener(listener);
-                        resolve();
+                const listener = (tabId, changeInfo, tabInfo) => {
+                    if (tabId === tab.id) {
+                        // Check if we're on the sign-in page
+                        if (tabInfo.url && tabInfo.url.includes('/users/sign_in')) {
+                            updateStatus('Please sign in to Kipu in the opened tab...', 'info');
+                        }
+                        // Check if we've reached the occupancy page and it's fully loaded
+                        else if (tabInfo.url && tabInfo.url.includes('/occupancy?p_building=6') && changeInfo.status === 'complete') {
+                            updateStatus('Occupancy page loaded, preparing extraction...', 'info');
+                            chrome.tabs.onUpdated.removeListener(listener);
+                            // Add a small delay to ensure page is fully rendered
+                            setTimeout(resolve, 2000);
+                        }
                     }
                 };
                 chrome.tabs.onUpdated.addListener(listener);
@@ -96,12 +105,13 @@ document.addEventListener('DOMContentLoaded', function() {
             if (clientData && clientData.length > 0) {
                 updateStatus(`Successfully extracted ${clientData.length} clients!`, 'success');
                 displayResults(clientData);
+                // Close the Kipu tab only on success
+                await chrome.tabs.remove(tab.id);
             } else {
-                updateStatus('No client data found. Make sure you are logged into Kipu.', 'error');
+                updateStatus('No client data found. The page may still be loading or you may need to sign in. Check the opened tab.', 'error');
+                // Don't close the tab so user can check what's wrong
+                console.log('No client data extracted. Tab left open for debugging.');
             }
-
-            // Close the Kipu tab
-            await chrome.tabs.remove(tab.id);
 
         } catch (error) {
             console.error('Error:', error);
@@ -454,7 +464,7 @@ function createEvaluationForm(client, existingEvaluation = null) {
                     
                     <div class="form-item">
                         <label class="form-label">Milieu Engagement:</label>
-                        <textarea class="form-textarea large" placeholder="How the client showed up in the milieu. Were they hanging out with their peers, helping out with chores, isolating, aggressive with peers or staff, etc..."></textarea>
+                        <textarea id="milieu_engagement" name="milieu_engagement" class="form-textarea large" placeholder="How the client showed up in the milieu. Were they hanging out with their peers, helping out with chores, isolating, aggressive with peers or staff, etc..."></textarea>
                     </div>
                 </div>
 
@@ -627,6 +637,226 @@ function updateClientCompletionStatus(patientId, isCompleted) {
     });
 }
 
+// Handle AI Enhancement for completed clients
+async function handleAIEnhancement(button, statusElement) {
+    try {
+        const apiKey = await getOpenAIApiKey();
+        if (!apiKey) {
+            updateStatusMessage('OpenAI API key required for AI enhancement', 'error', statusElement);
+            return;
+        }
+
+        // Loading state
+        setLoadingState(true, button, statusElement);
+        updateStatusMessage('Finding completed clients...', 'info', statusElement);
+
+        const completedClients = await getCompletedClientsWithEvaluations();
+        if (completedClients.length === 0) {
+            updateStatusMessage('No completed clients found. Please check off clients you want to enhance.', 'error', statusElement);
+            setLoadingState(false, button, statusElement);
+            return;
+        }
+
+        updateStatusMessage(`Enhancing ${completedClients.length} clients...`, 'info', statusElement);
+
+        // Enhance one-by-one and update stored evaluations' milieu_engagement
+        for (let i = 0; i < completedClients.length; i++) {
+            const client = completedClients[i];
+            updateStatusMessage(`Enhancing ${client.name} (${i + 1}/${completedClients.length})...`, 'info', statusElement);
+            try {
+                const shiftNote = await generateShiftNote(client);
+                await persistMilieuEngagementReplacement(client.patientId, shiftNote);
+            } catch (err) {
+                console.error('Enhancement error for client', client, err);
+            }
+        }
+
+        updateStatusMessage('AI enhancement completed.', 'success', statusElement);
+    } catch (error) {
+        console.error('AI Enhancement error:', error);
+        updateStatusMessage(`AI Enhancement failed: ${error.message}`, 'error', statusElement);
+    } finally {
+        setLoadingState(false, button, statusElement);
+    }
+}
+
+// Get completed clients with their most recent evaluation data
+async function getCompletedClientsWithEvaluations() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(null, function(result) {
+            const completionStatus = result.clientCompletionStatus || {};
+            const completedClientIds = Object.keys(completionStatus).filter(id => completionStatus[id]);
+
+            const completedClients = [];
+            completedClientIds.forEach(patientId => {
+                const client = (Array.isArray(extractedData) ? extractedData : []).find(c => String(c.patientId) === String(patientId));
+                if (!client) return;
+
+                const evaluationKeys = Object.keys(result).filter(key => key.startsWith(`evaluation_${patientId}_`));
+                let mostRecentEvaluation = null;
+                let mostRecentTimestamp = 0;
+                evaluationKeys.forEach(key => {
+                    const evaluation = result[key];
+                    if (evaluation && evaluation.client && String(evaluation.client.patientId) === String(patientId)) {
+                        const ts = new Date(evaluation.timestamp).getTime();
+                        if (ts > mostRecentTimestamp) {
+                            mostRecentTimestamp = ts;
+                            mostRecentEvaluation = evaluation;
+                        }
+                    }
+                });
+
+                if (mostRecentEvaluation) {
+                    completedClients.push({
+                        ...client,
+                        evaluationData: mostRecentEvaluation.data
+                    });
+                }
+            });
+
+            resolve(completedClients);
+        });
+    });
+}
+
+// Replace the stored milieu_engagement text with AI-generated shift note
+async function persistMilieuEngagementReplacement(patientId, shiftNote) {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(null, function(result) {
+            const evaluationKeys = Object.keys(result).filter(key => key.startsWith(`evaluation_${patientId}_`));
+            if (evaluationKeys.length === 0) return resolve();
+            // Update the most recent evaluation
+            let mostRecentKey = null; let mostRecentTs = 0;
+            evaluationKeys.forEach(key => {
+                const ev = result[key];
+                const ts = new Date(ev.timestamp).getTime();
+                if (ts > mostRecentTs) { mostRecentTs = ts; mostRecentKey = key; }
+            });
+            if (!mostRecentKey) return resolve();
+            const ev = result[mostRecentKey];
+            ev.data = ev.data || {};
+            ev.data.milieu_engagement = shiftNote;
+            chrome.storage.local.set({ [mostRecentKey]: ev }, resolve);
+        });
+    });
+}
+
+// Generate shift note using OpenAI
+async function generateShiftNote(client) {
+    const apiKey = await getOpenAIApiKey();
+    const model = await getOpenAIModel();
+
+    const evaluationSummary = formatEvaluationDataForAI(client.evaluationData);
+    const prompt = `You are a clinical documentation assistant. Based on the following patient evaluation data, write a highly polished, concise clinical shift note.\n\n` +
+`Patient: ${client.name} (ID: ${client.patientId})\n\n` +
+`Evaluation Data:\n${evaluationSummary}\n\n` +
+`Guidelines:\n` +
+`- Write in professional clinical language\n` +
+`- Be concise but comprehensive\n` +
+`- Focus on behavioral observations, engagement, and safety\n` +
+`- Include relevant medical compliance and concerns\n` +
+`- Note any risk factors or notable behaviors\n` +
+`- Use past tense\n` +
+`- Consider these example notes as style references (do not copy verbatim):\n\n` +
+`CLIENT HIGHLY ENGAGED – Example:\nClient remained stable throughout the shift, presenting with a calm and cooperative demeanor... (summary example)\n\n` +
+`CLIENT STRUGGLED WITH ENGAGEMENT – Example:\nClient appeared withdrawn and irritable throughout the shift... (summary example)\n\n` +
+`CLIENT SLEPT THROUGH THE NIGHT – Example Summary:\nClient was observed resting in their room throughout the duration of the overnight shift... (summary example)\n\n` +
+`CLIENT STRUGGLED WITH SLEEP – Example Summary:\nClient experienced difficulty sleeping during the overnight shift... (summary example)`;
+
+    const body = {
+        model: model || 'gpt-4o-mini',
+        messages: [
+            { role: 'system', content: 'You are a professional clinical documentation assistant specializing in behavioral health shift notes. Write clear, concise, and professional clinical documentation.' },
+            { role: 'user', content: prompt }
+        ],
+        max_tokens: 400,
+        temperature: 0.3
+    };
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+        throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+    }
+    const data = await response.json();
+    return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) ? data.choices[0].message.content.trim() : '';
+}
+
+// Format evaluation data for AI
+function formatEvaluationDataForAI(evaluationData) {
+    let summary = [];
+    if (!evaluationData) return 'No evaluation data.';
+
+    // Medication compliance
+    if (evaluationData.med_compliant) {
+        summary.push('• Medication compliant');
+    }
+    // Medical concerns
+    if (evaluationData.medical_concerns) {
+        summary.push('• No medical concerns reported');
+    }
+
+    // Sections
+    const sections = [
+        { name: 'ADLs', prefix: 'adls' },
+        { name: 'Appetite', prefix: 'appetite' },
+        { name: 'Behavior', prefix: 'behavior' },
+        { name: 'Thinking', prefix: 'thinking' },
+        { name: 'Eye Contact', prefix: 'eye_contact' },
+        { name: 'Affect', prefix: 'affect' },
+        { name: 'Mood', prefix: 'mood' },
+        { name: 'Speech', prefix: 'speech' },
+        { name: 'Orientation', prefix: 'orientation' },
+        { name: 'Insight', prefix: 'insight' },
+        { name: 'Risk Behaviors', prefix: 'risk_behaviors' },
+        { name: 'Withdrawal Symptoms', prefix: 'withdrawal' },
+        { name: 'PAW Symptoms', prefix: 'paw_symptoms' }
+    ];
+
+    sections.forEach(section => {
+        const values = [];
+        Object.keys(evaluationData).forEach(key => {
+            if (key.startsWith(section.prefix)) {
+                const val = evaluationData[key];
+                if (Array.isArray(val)) values.push(...val);
+                else if (val) values.push(val);
+            }
+        });
+        if (values.length > 0) summary.push(`• ${section.name}: ${values.join(', ')}`);
+    });
+
+    if (evaluationData.craving_level) {
+        summary.push(`• Craving level: ${evaluationData.craving_level}/10`);
+    }
+
+    if (evaluationData.milieu_engagement && String(evaluationData.milieu_engagement).trim()) {
+        summary.push(`• Milieu engagement notes: ${String(evaluationData.milieu_engagement).trim()}`);
+    }
+
+    return summary.length > 0 ? summary.join('\n') : 'No specific evaluation data recorded.';
+}
+
+// OpenAI API key management
+async function getOpenAIApiKey() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(['openai_api_key'], function(result) {
+            resolve(result.openai_api_key || null);
+        });
+    });
+}
+async function getOpenAIModel() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(['openai_model'], function(result) {
+            resolve(result.openai_model || 'gpt-4o-mini');
+        });
+    });
+}
 // Helper function to create checkbox groups
 function createCheckboxGroup(options, groupName) {
     return options.map((option, index) => `
@@ -653,11 +883,22 @@ function createRatingScale(min, max, name) {
 
 // Handle form submission
 function handleFormSubmission(client) {
-    const formData = new FormData(document.getElementById('patientEvaluationForm'));
+    const formEl = document.getElementById('patientEvaluationForm');
+    const formData = new FormData(formEl);
+    // Convert FormData to a rich object supporting arrays (checkbox groups)
+    const dataObj = {};
+    for (const [key, value] of formData.entries()) {
+        if (dataObj[key] !== undefined) {
+            if (!Array.isArray(dataObj[key])) dataObj[key] = [dataObj[key]];
+            dataObj[key].push(value);
+        } else {
+            dataObj[key] = value;
+        }
+    }
     const evaluationData = {
         client: client,
         timestamp: new Date().toISOString(),
-        data: Object.fromEntries(formData)
+        data: dataObj
     };
     
     // Store evaluation data
@@ -755,11 +996,12 @@ function loadPersistedClientList() {
 // Initialize main interface event listeners
 function initializeMainInterface() {
     const getClientListBtn = document.getElementById('getClientListBtn');
-    const exportBtn = document.getElementById('exportBtn');
-    const copyBtn = document.getElementById('copyBtn');
+    const enhanceBtn = document.getElementById('enhanceBtn');
+    const settingsBtn = document.getElementById('settingsBtn');
     const status = document.getElementById('status');
+    const tooltip = document.getElementById('aiTooltip');
     
-    if (!getClientListBtn || !exportBtn || !copyBtn || !status) return;
+    if (!getClientListBtn || !enhanceBtn || !settingsBtn || !status) return;
     
     // Get client list button
     getClientListBtn.addEventListener('click', async function() {
@@ -772,12 +1014,21 @@ function initializeMainInterface() {
                 url: 'https://foundrytreatmentcenter.kipuworks.com/occupancy?p_building=6'
             });
 
-            // Wait for tab to load
+            // Wait for tab to reach the final occupancy page (handling potential sign-in redirect)
             await new Promise((resolve) => {
-                const listener = (tabId, changeInfo) => {
-                    if (tabId === tab.id && changeInfo.status === 'complete') {
-                        chrome.tabs.onUpdated.removeListener(listener);
-                        resolve();
+                const listener = (tabId, changeInfo, tabInfo) => {
+                    if (tabId === tab.id) {
+                        // Check if we're on the sign-in page
+                        if (tabInfo.url && tabInfo.url.includes('/users/sign_in')) {
+                            updateStatusMessage('Please sign in to Kipu in the opened tab...', 'info', status);
+                        }
+                        // Check if we've reached the occupancy page and it's fully loaded
+                        else if (tabInfo.url && tabInfo.url.includes('/occupancy?p_building=6') && changeInfo.status === 'complete') {
+                            updateStatusMessage('Occupancy page loaded, preparing extraction...', 'info', status);
+                            chrome.tabs.onUpdated.removeListener(listener);
+                            // Add a small delay to ensure page is fully rendered
+                            setTimeout(resolve, 2000);
+                        }
                     }
                 };
                 chrome.tabs.onUpdated.addListener(listener);
@@ -807,12 +1058,13 @@ function initializeMainInterface() {
             if (clientData && clientData.length > 0) {
                 updateStatusMessage(`Successfully extracted ${clientData.length} clients!`, 'success', status);
                 displayResults(clientData);
+                // Close the Kipu tab only on success
+                await chrome.tabs.remove(tab.id);
             } else {
-                updateStatusMessage('No client data found. Make sure you are logged into Kipu.', 'error', status);
+                updateStatusMessage('No client data found. The page may still be loading or you may need to sign in. Check the opened tab.', 'error', status);
+                // Don't close the tab so user can check what's wrong
+                console.log('No client data extracted. Tab left open for debugging.');
             }
-
-            // Close the Kipu tab
-            await chrome.tabs.remove(tab.id);
 
         } catch (error) {
             console.error('Error:', error);
@@ -822,32 +1074,39 @@ function initializeMainInterface() {
         }
     });
 
-    // Export to JSON
-    exportBtn.addEventListener('click', function() {
-        const dataStr = JSON.stringify(extractedData, null, 2);
-        const dataBlob = new Blob([dataStr], { type: 'application/json' });
-        const url = URL.createObjectURL(dataBlob);
-        
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `kipu-clients-${new Date().toISOString().split('T')[0]}.json`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        
-        updateStatusMessage('Data exported successfully!', 'success', status);
+    // Settings toggle
+    settingsBtn.addEventListener('click', async function() {
+        const panel = document.getElementById('settingsPanel');
+        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        if (panel.style.display === 'block') {
+            await loadAISettingsIntoPanel();
+        }
     });
 
-    // Copy to clipboard
-    copyBtn.addEventListener('click', async function() {
-        try {
-            const dataStr = JSON.stringify(extractedData, null, 2);
-            await navigator.clipboard.writeText(dataStr);
-            updateStatusMessage('Data copied to clipboard!', 'success', status);
-        } catch (error) {
-            updateStatusMessage('Failed to copy to clipboard', 'error', status);
+    // Save settings
+    const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+    if (saveSettingsBtn) {
+        saveSettingsBtn.addEventListener('click', async function() {
+            const apiKey = document.getElementById('apiKeyInput').value.trim();
+            const model = document.getElementById('modelSelect').value;
+            await chrome.storage.local.set({ openai_api_key: apiKey, openai_model: model });
+            updateStatusMessage('Settings saved', 'success', status);
+            document.getElementById('settingsPanel').style.display = 'none';
+        });
+    }
+
+    // Enhance with AI
+    enhanceBtn.addEventListener('click', async function() {
+        const apiKey = await getOpenAIApiKey();
+        if (!apiKey) {
+            // Show tooltip near button
+            if (tooltip) {
+                tooltip.style.display = 'inline-block';
+                setTimeout(() => { tooltip.style.display = 'none'; }, 2000);
+            }
+            return;
         }
+        await handleAIEnhancement(enhanceBtn, status);
     });
     
     // Initialize status
@@ -873,6 +1132,18 @@ function setLoadingState(isLoading, button, status) {
 function updateStatusMessage(message, type, statusElement) {
     statusElement.textContent = message;
     statusElement.className = `status ${type}`;
+}
+
+async function loadAISettingsIntoPanel() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(['openai_api_key', 'openai_model'], function(result) {
+            const apiKeyInput = document.getElementById('apiKeyInput');
+            const modelSelect = document.getElementById('modelSelect');
+            if (apiKeyInput) apiKeyInput.value = result.openai_api_key || '';
+            if (modelSelect) modelSelect.value = result.openai_model || 'gpt-4o-mini';
+            resolve();
+        });
+    });
 }
 
 // Function to inject the KipuAssigned script

@@ -553,3 +553,58 @@ header p {
         justify-content: center;
     }
 }
+
+/* AI and Settings Styles */
+.ai-btn {
+    background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+}
+.ai-btn:hover {
+    background: linear-gradient(135deg, #45a049 0%, #3d8b40 100%);
+}
+
+.actions-row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 12px;
+}
+
+.settings-panel {
+    margin-top: 16px;
+    padding: 16px;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    background: #fafafa;
+}
+
+.settings-row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 12px;
+}
+.settings-row label {
+    width: 160px;
+    font-weight: 500;
+}
+.settings-row input,
+.settings-row select {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+}
+
+.settings-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.tooltip {
+    background: #c62828;
+    color: white;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+}

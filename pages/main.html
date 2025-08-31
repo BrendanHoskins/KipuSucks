@@ -30,8 +30,32 @@
                 <h3>Extracted Client Data</h3>
                 <div id="clientCount" class="client-count"></div>
                 <div id="clientList" class="client-list"></div>
-                <button id="exportBtn" class="btn secondary">Export as JSON</button>
-                <button id="copyBtn" class="btn secondary">Copy to Clipboard</button>
+                <div class="actions-row">
+                    <button id="enhanceBtn" class="btn primary ai-btn">
+                        <span class="btn-text">🤖 Enhance with AI</span>
+                        <span class="btn-loader" style="display: none;">⏳</span>
+                    </button>
+                    <button id="settingsBtn" class="btn secondary">Settings</button>
+                    <div id="aiTooltip" class="tooltip" style="display:none;">Input API key!</div>
+                </div>
+                <div id="settingsPanel" class="settings-panel" style="display:none;">
+                    <div class="settings-row">
+                        <label for="apiKeyInput">OpenAI API Key</label>
+                        <input type="password" id="apiKeyInput" placeholder="sk-...">
+                    </div>
+                    <div class="settings-row">
+                        <label for="modelSelect">Model</label>
+                        <select id="modelSelect">
+                            <option value="gpt-4o-mini">gpt-4o-mini</option>
+                            <option value="gpt-4o">gpt-4o</option>
+                            <option value="gpt-4-turbo">gpt-4-turbo</option>
+                            <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+                        </select>
+                    </div>
+                    <div class="settings-actions">
+                        <button id="saveSettingsBtn" class="btn secondary">Save</button>
+                    </div>
+                </div>
             </div>
         </main>
     </div>
