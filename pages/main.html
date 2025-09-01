@@ -18,10 +18,13 @@
                 <h2>Client List Extraction</h2>
                 <p>Click the button below to navigate to Kipu and extract the client list from the occupancy board.</p>
                 
-                <button id="getClientListBtn" class="btn primary">
-                    <span class="btn-text">Get Client List</span>
-                    <span class="btn-loader" style="display: none;">⏳</span>
-                </button>
+                <div class="button-row">
+                    <button id="getClientListBtn" class="btn primary">
+                        <span class="btn-text">Get Client List</span>
+                        <span class="btn-loader" style="display: none;">⏳</span>
+                    </button>
+                    <button id="importCravingsBtn" class="btn secondary">📋 Import Cravings</button>
+                </div>
 
                 <div id="status" class="status"></div>
             </div>
@@ -36,6 +39,7 @@
                         <span class="btn-loader" style="display: none;">⏳</span>
                     </button>
                     <button id="settingsBtn" class="btn secondary">Settings</button>
+                    <button id="deleteDataBtn" class="btn secondary danger">Delete Client Data</button>
                     <div id="aiTooltip" class="tooltip" style="display:none;">Input API key!</div>
                 </div>
                 <div id="settingsPanel" class="settings-panel" style="display:none;">
@@ -58,6 +62,21 @@
                 </div>
             </div>
         </main>
+    </div>
+
+    <!-- Import Cravings Modal -->
+    <div id="cravingsModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <span class="close-button" id="closeCravingsModal">&times;</span>
+            <h2>Import Morning Opener Cravings</h2>
+            <p>Paste the morning opener text blob below. The system will automatically parse craving levels and match them to clients.</p>
+            <textarea id="cravingsTextarea" placeholder="Paste morning opener text here..." rows="15" style="width: 100%; margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-family: monospace; font-size: 12px;"></textarea>
+            <div class="modal-actions">
+                <button id="parseCravingsBtn" class="btn primary">Parse & Import Cravings</button>
+                <button id="cancelCravingsBtn" class="btn secondary">Cancel</button>
+            </div>
+            <div id="cravingsStatus" class="status" style="margin-top: 10px;"></div>
+        </div>
     </div>
 
     <script src="main.js"></script>

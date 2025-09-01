@@ -4,8 +4,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const resultsCard = document.getElementById('resultsCard');
     const clientCount = document.getElementById('clientCount');
     const clientList = document.getElementById('clientList');
-    const exportBtn = document.getElementById('exportBtn');
-    const copyBtn = document.getElementById('copyBtn');
+    // Note: Export/Copy buttons removed in favor of AI enhancement
 
     let extractedData = [];
 
@@ -44,6 +43,9 @@ document.addEventListener('DOMContentLoaded', function() {
         
         renderClientList(data);
         resultsCard.style.display = 'block';
+        
+        // Set up AI button event listeners now that results card is visible
+        setupAIButtonListeners();
     }
 
 
@@ -121,33 +123,39 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Export to JSON
-    exportBtn.addEventListener('click', function() {
-        const dataStr = JSON.stringify(extractedData, null, 2);
-        const dataBlob = new Blob([dataStr], { type: 'application/json' });
-        const url = URL.createObjectURL(dataBlob);
-        
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `kipu-clients-${new Date().toISOString().split('T')[0]}.json`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        
-        updateStatus('Data exported successfully!', 'success');
-    });
+    // Export/Copy functionality removed in favor of AI enhancement
 
-    // Copy to clipboard
-    copyBtn.addEventListener('click', async function() {
-        try {
-            const dataStr = JSON.stringify(extractedData, null, 2);
-            await navigator.clipboard.writeText(dataStr);
-            updateStatus('Data copied to clipboard!', 'success');
-        } catch (error) {
-            updateStatus('Failed to copy to clipboard', 'error');
-        }
-    });
+    // Set up Import Cravings button (available on initial load)
+    const importCravingsBtn = document.getElementById('importCravingsBtn');
+    if (importCravingsBtn) {
+        console.log('Setting up Import Cravings button in DOMContentLoaded');
+        importCravingsBtn.addEventListener('click', function() {
+            console.log('Import Cravings button clicked (from DOMContentLoaded)');
+            showCravingsModal();
+        });
+    } else {
+        console.log('Import Cravings button not found in DOMContentLoaded');
+    }
+
+    // Also bind delete button here if present on initial load
+    const deleteDataBtn = document.getElementById('deleteDataBtn');
+    if (deleteDataBtn) {
+        deleteDataBtn.addEventListener('click', async function() {
+            if (!confirm('Delete all client list and evaluation data? This cannot be undone.')) return;
+            try {
+                updateStatus('Deleting all client data...', 'info');
+                await wipeAllClientData();
+                updateStatus('All client data deleted.', 'success');
+                // Reset UI
+                clientList.innerHTML = '';
+                clientCount.textContent = '';
+                resultsCard.style.display = 'none';
+            } catch (e) {
+                console.error('Delete data error:', e);
+                updateStatus('Failed to delete data.', 'error');
+            }
+        });
+    }
 
     // Initialize
     updateStatus('Ready to extract client data', 'info');
@@ -155,6 +163,79 @@ document.addEventListener('DOMContentLoaded', function() {
     // Load persisted client list on startup
     loadPersistedClientList();
 });
+
+// Set up AI button event listeners (called when results are displayed)
+function setupAIButtonListeners() {
+    const enhanceBtn = document.getElementById('enhanceBtn');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const deleteDataBtn = document.getElementById('deleteDataBtn');
+    const tooltip = document.getElementById('aiTooltip');
+    const status = document.getElementById('status');
+    
+    console.log('Setting up AI button listeners:', {
+        enhanceBtn: !!enhanceBtn,
+        settingsBtn: !!settingsBtn,
+        tooltip: !!tooltip,
+        status: !!status
+    });
+    
+    // Settings toggle
+    if (settingsBtn) {
+        // Remove any existing listeners by cloning the node
+        const newSettingsBtn = settingsBtn.cloneNode(true);
+        settingsBtn.parentNode.replaceChild(newSettingsBtn, settingsBtn);
+        
+        newSettingsBtn.addEventListener('click', async function() {
+            const panel = document.getElementById('settingsPanel');
+            const isHidden = panel.style.display === 'none' || panel.style.display === '';
+            panel.style.display = isHidden ? 'block' : 'none';
+            if (isHidden) {
+                await loadAISettingsIntoPanel();
+            }
+        });
+    }
+    
+    // Save settings
+    const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+    if (saveSettingsBtn) {
+        // Remove any existing listeners by cloning the node
+        const newSaveBtn = saveSettingsBtn.cloneNode(true);
+        saveSettingsBtn.parentNode.replaceChild(newSaveBtn, saveSettingsBtn);
+        
+        newSaveBtn.addEventListener('click', async function() {
+            const apiKey = document.getElementById('apiKeyInput').value.trim();
+            const model = document.getElementById('modelSelect').value;
+            await chrome.storage.local.set({ openai_api_key: apiKey, openai_model: model });
+            updateStatusMessage('Settings saved', 'success', status);
+            document.getElementById('settingsPanel').style.display = 'none';
+        });
+    }
+    
+    // Enhance with AI
+    if (enhanceBtn) {
+        // Remove any existing listeners by cloning the node
+        const newEnhanceBtn = enhanceBtn.cloneNode(true);
+        enhanceBtn.parentNode.replaceChild(newEnhanceBtn, enhanceBtn);
+        
+        newEnhanceBtn.addEventListener('click', async function() {
+            // Hide tooltip if it's showing
+            if (tooltip) {
+                tooltip.style.display = 'none';
+            }
+            
+            const apiKey = await getOpenAIApiKey();
+            if (!apiKey) {
+                // Show tooltip near button
+                if (tooltip) {
+                    tooltip.style.display = 'inline-block';
+                    setTimeout(() => { tooltip.style.display = 'none'; }, 3000);
+                }
+                return;
+            }
+            await handleAIEnhancement(newEnhanceBtn, status);
+        });
+    }
+}
 
 // Render client list in the UI (global function)
 function renderClientList(data, clientListElement = null) {
@@ -495,7 +576,10 @@ function createEvaluationForm(client, existingEvaluation = null) {
     // Add conditional logic for hiding/showing textareas
     setupConditionalTextareas();
     
-    // Populate form with existing data if available
+    // Auto-populate craving level from imported data if available
+    autoPopulateCravingLevel(client);
+    
+    // Populate form with existing data if available (this will override craving auto-population if evaluation exists)
     if (existingEvaluation && existingEvaluation.data) {
         populateFormWithExistingData(existingEvaluation.data);
     }
@@ -747,21 +831,22 @@ async function generateShiftNote(client) {
     const model = await getOpenAIModel();
 
     const evaluationSummary = formatEvaluationDataForAI(client.evaluationData);
-    const prompt = `You are a clinical documentation assistant. Based on the following patient evaluation data, write a highly polished, concise clinical shift note.\n\n` +
-`Patient: ${client.name} (ID: ${client.patientId})\n\n` +
-`Evaluation Data:\n${evaluationSummary}\n\n` +
+    const prompt = `Based on the following patient evaluation data, write a highly polished, concise clinical shift note in ONE paragraph. Do your best to make connections between all of the evaluation data; do your best to not merely restate the evaluation data.\n\n` +
 `Guidelines:\n` +
+`- Do not include the date or time - just include clinical data\n` +
 `- Write in professional clinical language\n` +
 `- Be concise but comprehensive\n` +
 `- Focus on behavioral observations, engagement, and safety\n` +
 `- Include relevant medical compliance and concerns\n` +
+`- NEVER make clinical or medical recommendations - these are technician, non-medical, non-clinical shift notes\n` +
 `- Note any risk factors or notable behaviors\n` +
 `- Use past tense\n` +
 `- Consider these example notes as style references (do not copy verbatim):\n\n` +
-`CLIENT HIGHLY ENGAGED – Example:\nClient remained stable throughout the shift, presenting with a calm and cooperative demeanor... (summary example)\n\n` +
-`CLIENT STRUGGLED WITH ENGAGEMENT – Example:\nClient appeared withdrawn and irritable throughout the shift... (summary example)\n\n` +
-`CLIENT SLEPT THROUGH THE NIGHT – Example Summary:\nClient was observed resting in their room throughout the duration of the overnight shift... (summary example)\n\n` +
-`CLIENT STRUGGLED WITH SLEEP – Example Summary:\nClient experienced difficulty sleeping during the overnight shift... (summary example)`;
+`CLIENT HIGHLY ENGAGED – Example Shift Note:\nClient remained stable throughout the shift, presenting with a calm and cooperative demeanor. They participated in scheduled groups and meals without issue and engaged appropriately with peers and staff. No incidents or safety concerns were observed or reported. Vital signs were within normal limits, and the client complied with medication protocols as administered. The client appeared well-groomed and maintained personal hygiene. Staff observed no signs of distress, intoxication, or withdrawal. Client responded to redirection when needed and required minimal prompting for task completion. Overall, the client demonstrated appropriate behavior and maintained safety throughout the duration of the shift.\n\n` +
+`CLIENT STRUGGLED WITH ENGAGING IN MILIEU – Example Shift Note:\nClient appeared withdrawn and irritable throughout the shift. They declined participation in two out of three scheduled groups despite redirection and encouragement from staff. During the one group they attended, client was present but minimally engaged. Client spent the majority of the day isolating in their room and required multiple prompts to complete hygiene tasks and attend meals. Staff noted that the client appeared tearful at times and reported feeling overwhelmed when briefly engaged. No safety concerns were observed or reported during the shift, and the client denied suicidal or homicidal ideation when assessed. Continued monitoring and clinical follow-up recommended.\n\n` +
+`CLIENT SLEPT THROUGH THE NIGHT – Example Shift Note Summary:\nClient was observed resting in their room throughout the duration of the overnight shift. Sleep appeared uninterrupted and restful, with client changing position periodically but showing no signs of distress. All safety checks were completed, and the client remained safe with no behavioral concerns. No incidents or notable interactions occurred overnight. Client was redirected once for a minor noise disturbance and responded appropriately.\n\n` +
+`CLIENT STRUGGLED WITH SLEEP – Example Shift Notes Summary:\nClient experienced difficulty sleeping during the overnight shift. They were observed out of bed multiple times and reported feeling restless and anxious. Staff offered supportive redirection and coping strategies, which the client was initially receptive to, but they continued to pace the hallway intermittently. Client declined PRN medication when offered and eventually rested for short intervals but did not achieve sustained sleep. No safety concerns were reported, and the client remained cooperative with staff interventions. Continued support and clinical follow-up are recommended.\n\n` +
+`Evaluation Data:\n${evaluationSummary}`;
 
     const body = {
         model: model || 'gpt-4o-mini',
@@ -800,6 +885,30 @@ function formatEvaluationDataForAI(evaluationData) {
     // Medical concerns
     if (evaluationData.medical_concerns) {
         summary.push('• No medical concerns reported');
+    }
+
+    // Delete all client/evaluation data
+    if (deleteDataBtn) {
+        const newDeleteBtn = deleteDataBtn.cloneNode(true);
+        deleteDataBtn.parentNode.replaceChild(newDeleteBtn, deleteDataBtn);
+        newDeleteBtn.addEventListener('click', async function() {
+            if (!confirm('Delete all client list and evaluation data? This cannot be undone.')) return;
+            try {
+                updateStatusMessage('Deleting all client data...', 'info', status);
+                await wipeAllClientData();
+                updateStatusMessage('All client data deleted.', 'success', status);
+                // Reset UI
+                const clientListElement = document.getElementById('clientList');
+                const clientCount = document.getElementById('clientCount');
+                if (clientListElement) clientListElement.innerHTML = '';
+                if (clientCount) clientCount.textContent = '';
+                const resultsCard = document.getElementById('resultsCard');
+                if (resultsCard) resultsCard.style.display = 'none';
+            } catch (e) {
+                console.error('Delete data error:', e);
+                updateStatusMessage('Failed to delete data.', 'error', status);
+            }
+        });
     }
 
     // Sections
@@ -928,10 +1037,13 @@ function restoreMainInterface() {
                 <h2>Client List Extraction</h2>
                 <p>Click the button below to navigate to Kipu and extract the client list from the occupancy board.</p>
                 
-                <button id="getClientListBtn" class="btn primary">
-                    <span class="btn-text">Get Client List</span>
-                    <span class="btn-loader" style="display: none;">⏳</span>
-                </button>
+                <div class="button-row">
+                    <button id="getClientListBtn" class="btn primary">
+                        <span class="btn-text">Get Client List</span>
+                        <span class="btn-loader" style="display: none;">⏳</span>
+                    </button>
+                    <button id="importCravingsBtn" class="btn secondary">📋 Import Cravings</button>
+                </div>
 
                 <div id="status" class="status"></div>
             </div>
@@ -940,8 +1052,32 @@ function restoreMainInterface() {
                 <h3>Extracted Client Data</h3>
                 <div id="clientCount" class="client-count"></div>
                 <div id="clientList" class="client-list"></div>
-                <button id="exportBtn" class="btn secondary">Export as JSON</button>
-                <button id="copyBtn" class="btn secondary">Copy to Clipboard</button>
+                <div class="actions-row">
+                    <button id="enhanceBtn" class="btn primary ai-btn">
+                        <span class="btn-text">🤖 Enhance with AI</span>
+                        <span class="btn-loader" style="display: none;">⏳</span>
+                    </button>
+                    <button id="settingsBtn" class="btn secondary">Settings</button>
+                    <div id="aiTooltip" class="tooltip" style="display:none;">Input API key!</div>
+                </div>
+                <div id="settingsPanel" class="settings-panel" style="display:none;">
+                    <div class="settings-row">
+                        <label for="apiKeyInput">OpenAI API Key</label>
+                        <input type="password" id="apiKeyInput" placeholder="sk-...">
+                    </div>
+                    <div class="settings-row">
+                        <label for="modelSelect">Model</label>
+                        <select id="modelSelect">
+                            <option value="gpt-4o-mini">gpt-4o-mini</option>
+                            <option value="gpt-4o">gpt-4o</option>
+                            <option value="gpt-4-turbo">gpt-4-turbo</option>
+                            <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+                        </select>
+                    </div>
+                    <div class="settings-actions">
+                        <button id="saveSettingsBtn" class="btn secondary">Save</button>
+                    </div>
+                </div>
             </div>
         </main>
     `;
@@ -976,6 +1112,9 @@ function loadPersistedClientList() {
                 renderClientList(result.clientList, clientListElement);
                 resultsCard.style.display = 'block';
                 
+                // Set up AI button event listeners for restored results
+                setupAIButtonListeners();
+                
                 // Show when the list was last updated
                 const timestamp = new Date(result.clientListTimestamp);
                 status.textContent = `Client list loaded (last updated: ${timestamp.toLocaleString()})`;
@@ -998,10 +1137,25 @@ function initializeMainInterface() {
     const getClientListBtn = document.getElementById('getClientListBtn');
     const enhanceBtn = document.getElementById('enhanceBtn');
     const settingsBtn = document.getElementById('settingsBtn');
+    const deleteDataBtn = document.getElementById('deleteDataBtn');
+    const importCravingsBtn = document.getElementById('importCravingsBtn');
     const status = document.getElementById('status');
     const tooltip = document.getElementById('aiTooltip');
     
-    if (!getClientListBtn || !enhanceBtn || !settingsBtn || !status) return;
+    if (!getClientListBtn || !status) {
+        console.log('Missing required elements in initializeMainInterface');
+        return;
+    }
+    
+    // AI buttons might not be present initially, so we'll check for them separately
+    console.log('Elements found:', {
+        getClientListBtn: !!getClientListBtn,
+        enhanceBtn: !!enhanceBtn,
+        settingsBtn: !!settingsBtn,
+        status: !!status,
+        tooltip: !!tooltip,
+        deleteDataBtn: !!deleteDataBtn
+    });
     
     // Get client list button
     getClientListBtn.addEventListener('click', async function() {
@@ -1074,40 +1228,19 @@ function initializeMainInterface() {
         }
     });
 
-    // Settings toggle
-    settingsBtn.addEventListener('click', async function() {
-        const panel = document.getElementById('settingsPanel');
-        panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-        if (panel.style.display === 'block') {
-            await loadAISettingsIntoPanel();
-        }
-    });
-
-    // Save settings
-    const saveSettingsBtn = document.getElementById('saveSettingsBtn');
-    if (saveSettingsBtn) {
-        saveSettingsBtn.addEventListener('click', async function() {
-            const apiKey = document.getElementById('apiKeyInput').value.trim();
-            const model = document.getElementById('modelSelect').value;
-            await chrome.storage.local.set({ openai_api_key: apiKey, openai_model: model });
-            updateStatusMessage('Settings saved', 'success', status);
-            document.getElementById('settingsPanel').style.display = 'none';
+    // Import Cravings button
+    if (importCravingsBtn) {
+        console.log('Setting up Import Cravings button listener');
+        importCravingsBtn.addEventListener('click', function() {
+            console.log('Import Cravings button clicked');
+            showCravingsModal();
         });
+    } else {
+        console.log('Import Cravings button not found');
     }
-
-    // Enhance with AI
-    enhanceBtn.addEventListener('click', async function() {
-        const apiKey = await getOpenAIApiKey();
-        if (!apiKey) {
-            // Show tooltip near button
-            if (tooltip) {
-                tooltip.style.display = 'inline-block';
-                setTimeout(() => { tooltip.style.display = 'none'; }, 2000);
-            }
-            return;
-        }
-        await handleAIEnhancement(enhanceBtn, status);
-    });
+    
+    // AI button event listeners are now handled by setupAIButtonListeners() 
+    // which is called when results are displayed
     
     // Initialize status
     updateStatusMessage('Ready to extract client data', 'info', status);
@@ -1254,4 +1387,367 @@ async function extractClientData() {
     }
     
     return await window.KipuAssigned.extract({ pages: "current" });
+}
+
+// ================================
+// CRAVINGS IMPORT FUNCTIONALITY
+// ================================
+
+// Show the cravings import modal
+function showCravingsModal() {
+    console.log('showCravingsModal called');
+    const modal = document.getElementById('cravingsModal');
+    const textarea = document.getElementById('cravingsTextarea');
+    const statusDiv = document.getElementById('cravingsStatus');
+    
+    console.log('Modal elements found:', {
+        modal: !!modal,
+        textarea: !!textarea,
+        statusDiv: !!statusDiv
+    });
+    
+    if (!modal) {
+        console.error('Cravings modal not found in DOM');
+        return;
+    }
+    
+    // Clear previous content and status
+    if (textarea) textarea.value = '';
+    if (statusDiv) {
+        statusDiv.textContent = '';
+        statusDiv.className = 'status';
+    }
+    
+    modal.style.display = 'block';
+    console.log('Modal should now be visible');
+    
+    // Set up modal event listeners
+    setupCravingsModalListeners();
+}
+
+// Set up event listeners for the cravings modal
+function setupCravingsModalListeners() {
+    const modal = document.getElementById('cravingsModal');
+    const closeBtn = document.getElementById('closeCravingsModal');
+    const cancelBtn = document.getElementById('cancelCravingsBtn');
+    const parseBtn = document.getElementById('parseCravingsBtn');
+    
+    // Close modal handlers
+    const closeModal = () => {
+        modal.style.display = 'none';
+    };
+    
+    closeBtn.onclick = closeModal;
+    cancelBtn.onclick = closeModal;
+    
+    // Close modal when clicking outside
+    window.onclick = function(event) {
+        if (event.target === modal) {
+            closeModal();
+        }
+    };
+    
+    // Parse cravings button
+    parseBtn.onclick = function() {
+        const textarea = document.getElementById('cravingsTextarea');
+        const text = textarea.value.trim();
+        
+        if (!text) {
+            updateCravingsStatus('Please paste the morning opener text first.', 'error');
+            return;
+        }
+        
+        processCravingsData(text);
+    };
+}
+
+// Update status in the cravings modal
+function updateCravingsStatus(message, type = 'info') {
+    const statusDiv = document.getElementById('cravingsStatus');
+    statusDiv.textContent = message;
+    statusDiv.className = `status ${type}`;
+}
+
+// Parse the morning opener text and extract craving data
+function processCravingsData(text) {
+    updateCravingsStatus('Parsing morning opener data...', 'info');
+    
+    try {
+        const clients = parseMorningOpenerText(text);
+        const matches = matchClientsWithCravings(clients);
+        storeCravingData(matches);
+        
+        updateCravingsStatus(`Successfully processed ${matches.length} clients with craving data.`, 'success');
+        
+        // Close modal after short delay
+        setTimeout(() => {
+            document.getElementById('cravingsModal').style.display = 'none';
+        }, 2000);
+        
+    } catch (error) {
+        console.error('Error processing cravings data:', error);
+        updateCravingsStatus(`Error processing data: ${error.message}`, 'error');
+    }
+}
+
+// Parse the morning opener text blob
+function parseMorningOpenerText(text) {
+    const clients = [];
+    const lines = text.split('\n');
+    let currentClient = null;
+
+    function normalizeFfr(ffrRaw) {
+        if (!ffrRaw) return null;
+        const m = String(ffrRaw).toUpperCase().match(/FFR[\s-]*(\d{4})[\s-]*(\d{2,3})/);
+        if (!m) return null;
+        const year = m[1];
+        const last = m[2].padStart(3, '0');
+        return { canonical: `FFR-${year}-${last}`, key: `FFR${year}${last}` };
+    }
+
+    function extractNameAndFfrFromLine(idx) {
+        const raw = lines[idx] ?? '';
+        const line = raw.trim();
+        const f = line.match(/(FFR[\s-]*\d{4}[\s-]*\d{2,3})/i);
+        if (!f) return null;
+        const ffr = normalizeFfr(f[1]);
+        // Try to get name from same line before FFR token
+        const namePart = line.slice(0, f.index).trim();
+        let name = namePart;
+        if (!name) {
+            // Fallback: previous non-empty line
+            for (let j = idx - 1; j >= 0; j--) {
+                const prev = (lines[j] || '').trim();
+                if (prev) { name = prev; break; }
+            }
+        }
+        return ffr ? { name, ffr } : null;
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+        const trimmed = (lines[i] || '').trim();
+
+        // Any line containing FFR (flexible formatting) starts a new client
+        const candidate = extractNameAndFfrFromLine(i);
+        if (candidate && candidate.name) {
+            if (currentClient) clients.push(currentClient);
+            currentClient = {
+                name: candidate.name,
+                ffrNumber: candidate.ffr.canonical,
+                ffrKey: candidate.ffr.key,
+                cravings: []
+            };
+            continue;
+        }
+
+        // Parse craving/trigger line
+        if (currentClient && trimmed.toLowerCase().includes('cravings/triggers')) {
+            const idxColon = trimmed.indexOf(':');
+            const cravingsData = idxColon >= 0 ? trimmed.slice(idxColon + 1).trim() : trimmed;
+            currentClient.cravings = extractCravingLevels(cravingsData);
+        }
+    }
+
+    // Don't forget the last client
+    if (currentClient) {
+        clients.push(currentClient);
+    }
+
+    console.log('Parsed clients:', clients);
+    return clients;
+}
+
+// Extract craving levels from the cravings/triggers text (robust: supports unlabeled numbers)
+function extractCravingLevels(cravingsText) {
+    const out = [];
+    if (!cravingsText) return out;
+
+    const text = String(cravingsText).toLowerCase();
+
+    // Known substance abbreviations for nicer labels (optional)
+    const substanceMap = {
+        'alc': 'alcohol',
+        'nic': 'nicotine',
+        'coc': 'cocaine',
+        'her': 'heroin',
+        'meth': 'methamphetamine',
+        'pot': 'marijuana',
+        'weed': 'marijuana',
+        'thc': 'marijuana',
+        'sub': 'substance'
+    };
+
+    // 1) Labeled forms like: "alc 5", "nic-7", "alc: 4"
+    const labeledRegex = /(?:^|[\s,])(alc|nic|coc|her|meth|pot|weed|thc|sub)\s*[-:]?\s*(10|[0-9])(?=$|[^0-9])/gi;
+    let m;
+    while ((m = labeledRegex.exec(text)) !== null) {
+        const sub = (m[1] || '').trim();
+        const lvl = parseInt(m[2], 10);
+        if (!Number.isNaN(lvl) && lvl >= 0 && lvl <= 10) {
+            out.push({ substance: substanceMap[sub] || sub, level: lvl });
+        }
+    }
+
+    // 2) Patterns like: "10 for ..." (number-first)
+    const numberForRegex = /\b(10|[0-9])\s*for\b/gi;
+    let nf;
+    while ((nf = numberForRegex.exec(text)) !== null) {
+        const lvl = parseInt(nf[1], 10);
+        if (!Number.isNaN(lvl) && lvl >= 0 && lvl <= 10) {
+            out.push({ substance: 'unknown', level: lvl });
+        }
+    }
+
+    // 3) Generic numeric fallback: grab all numbers and keep those in [0..10]
+    // Handles: "0/10", "0-0", "0 and 0", "nic-7", "0for" etc.
+    const allNums = (text.match(/\d+/g) || [])
+        .map(n => parseInt(n, 10))
+        .filter(n => !Number.isNaN(n) && n >= 0 && n <= 10);
+
+    if (allNums.length === 0 && out.length === 0) return out;
+
+    // Determine the single highest level found overall
+    const highest = Math.max(
+        ...(out.map(o => o.level).concat([-1])),
+        ...(allNums.length ? allNums : [-1])
+    );
+
+    // Return only the max level (substance optional)
+    if (highest >= 0) {
+        // Prefer a labeled entry if one matches the highest value
+        const labeled = out.find(o => o.level === highest);
+        return [{ substance: labeled ? labeled.substance : 'unknown', level: highest }];
+    }
+
+    return out;
+}
+
+// Match clients from morning opener with clients from our extracted list
+function matchClientsWithCravings(morningClients) {
+    if (!extractedData || !Array.isArray(extractedData)) {
+        throw new Error('No client list found. Please extract client list first.');
+    }
+    
+    const matches = [];
+    function normalizeFfrFromP(pText) {
+        if (!pText) return null;
+        const m = String(pText).toUpperCase().match(/FFR[\s-]*(\d{4})[\s-]*(\d{2,3})/);
+        if (!m) return null;
+        const year = m[1];
+        const last = m[2].padStart(3, '0');
+        return `FFR${year}${last}`; // key form
+    }
+
+    morningClients.forEach(morningClient => {
+        // Find matching client in our extracted data by FFR number (normalized)
+        const targetKey = morningClient.ffrKey || (morningClient.ffrNumber ? morningClient.ffrNumber.replace(/[^0-9A-Z]/g, '') : null);
+        const matchedClient = extractedData.find(client => {
+            const key = normalizeFfrFromP(client.p || '');
+            return key && targetKey && key === targetKey;
+        });
+        
+        if (matchedClient && morningClient.cravings.length > 0) {
+            // Find the highest craving level
+            const highestCraving = morningClient.cravings.reduce((max, current) => 
+                current.level > max.level ? current : max
+            );
+            
+            matches.push({
+                client: matchedClient,
+                morningData: morningClient,
+                highestCraving: highestCraving
+            });
+        }
+    });
+    
+    console.log('Matched clients with cravings:', matches);
+    return matches;
+}
+
+// Store craving data for use when opening evaluation forms
+function storeCravingData(matches) {
+    const cravingData = {};
+    
+    matches.forEach(match => {
+        cravingData[match.client.patientId] = {
+            substance: match.highestCraving.substance,
+            level: match.highestCraving.level,
+            ffrNumber: match.morningData.ffrNumber,
+            clientName: match.client.name
+        };
+    });
+    
+    // Store in Chrome storage
+    chrome.storage.local.set({ 'importedCravings': cravingData }, function() {
+        console.log('Craving data stored:', cravingData);
+    });
+}
+
+// Wipe all client list, evaluations, completion flags, AI settings (optional keep), and imported cravings
+async function wipeAllClientData() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(null, function(all) {
+            const keysToRemove = [];
+
+            // Client list and timestamp
+            if ('clientList' in all) keysToRemove.push('clientList');
+            if ('clientListTimestamp' in all) keysToRemove.push('clientListTimestamp');
+
+            // Completion checkboxes
+            if ('clientCompletionStatus' in all) keysToRemove.push('clientCompletionStatus');
+
+            // Imported cravings
+            if ('importedCravings' in all) keysToRemove.push('importedCravings');
+
+            // Evaluations
+            Object.keys(all).forEach(k => {
+                if (k.startsWith('evaluation_')) keysToRemove.push(k);
+            });
+
+            // Optionally keep OpenAI settings; comment next 2 lines if you want to delete
+            // if ('openai_api_key' in all) keysToRemove.push('openai_api_key');
+            // if ('openai_model' in all) keysToRemove.push('openai_model');
+
+            if (keysToRemove.length === 0) return resolve();
+            chrome.storage.local.remove(keysToRemove, () => resolve());
+        });
+    });
+}
+
+// Auto-populate craving level in evaluation form from imported morning opener data
+function autoPopulateCravingLevel(client) {
+    chrome.storage.local.get(['importedCravings'], function(result) {
+        const cravingData = result.importedCravings || {};
+        const pid = String(client.patientId);
+        let clientCraving = cravingData[pid] || cravingData[client.patientId];
+        if (!clientCraving) {
+            // Fallback: find by loose key match
+            const foundKey = Object.keys(cravingData).find(k => String(k) === pid);
+            if (foundKey) clientCraving = cravingData[foundKey];
+        }
+        
+        if (clientCraving) {
+            console.log('Auto-populating craving level for', client.name, ':', clientCraving);
+            
+            // Find and check the radio button for the craving level
+            const levelToUse = Math.max(1, Number(clientCraving.level) || 0); // clamp 0 to 1 (UI supports 1..10)
+            const cravingRadio = document.querySelector(`input[name="craving_level"][value="${levelToUse}"]`);
+            if (cravingRadio) {
+                cravingRadio.checked = true;
+                console.log(`Set craving level to ${levelToUse} for ${client.name}`);
+                
+                // Show a subtle notification that data was auto-populated
+                const cravingSection = cravingRadio.closest('.form-item');
+                if (cravingSection) {
+                    const label = cravingSection.querySelector('.form-label');
+                    if (label && !label.textContent.includes('(auto-filled)')) {
+                        label.textContent += ` (auto-filled: ${clientCraving.substance || 'unlabeled'} ${levelToUse})`;
+                        label.style.color = '#2e7d32'; // Green color to indicate auto-fill
+                    }
+                }
+            } else {
+                console.warn('Craving radio not found for level', levelToUse, 'for client', client);
+            }
+        }
+    });
 }
