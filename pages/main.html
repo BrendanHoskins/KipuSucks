@@ -24,6 +24,7 @@
                         <span class="btn-loader" style="display: none;">⏳</span>
                     </button>
                     <button id="importCravingsBtn" class="btn secondary">📋 Import Cravings</button>
+                    <button id="importShiftNotesBtn" class="btn secondary">📝 Import Shift Notes</button>
                 </div>
 
                 <div id="status" class="status"></div>
@@ -38,6 +39,7 @@
                         <span class="btn-text">🤖 Enhance with AI</span>
                         <span class="btn-loader" style="display: none;">⏳</span>
                     </button>
+                    <button id="saveInKipuBtn" class="btn primary">Save in Kipu</button>
                     <button id="settingsBtn" class="btn secondary">Settings</button>
                     <button id="deleteDataBtn" class="btn secondary danger">Delete Client Data</button>
                     <div id="aiTooltip" class="tooltip" style="display:none;">Input API key!</div>
@@ -76,6 +78,21 @@
                 <button id="cancelCravingsBtn" class="btn secondary">Cancel</button>
             </div>
             <div id="cravingsStatus" class="status" style="margin-top: 10px;"></div>
+        </div>
+    </div>
+
+    <!-- Import Shift Notes Modal -->
+    <div id="shiftNotesModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <span class="close-button" id="closeShiftNotesModal">&times;</span>
+            <h2>Import Shift Notes</h2>
+            <p>Paste the shift notes blob. We'll parse Day and Swing notes per client and store them.</p>
+            <textarea id="shiftNotesTextarea" placeholder="Paste shift notes here..." rows="18" style="width: 100%; margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-family: monospace; font-size: 12px;"></textarea>
+            <div class="modal-actions">
+                <button id="parseShiftNotesBtn" class="btn primary">Parse & Import Shift Notes</button>
+                <button id="cancelShiftNotesBtn" class="btn secondary">Cancel</button>
+            </div>
+            <div id="shiftNotesStatus" class="status" style="margin-top: 10px;"></div>
         </div>
     </div>
 

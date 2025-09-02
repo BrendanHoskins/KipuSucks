@@ -127,6 +127,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Set up Import Cravings button (available on initial load)
     const importCravingsBtn = document.getElementById('importCravingsBtn');
+    const importShiftNotesBtn = document.getElementById('importShiftNotesBtn');
     if (importCravingsBtn) {
         console.log('Setting up Import Cravings button in DOMContentLoaded');
         importCravingsBtn.addEventListener('click', function() {
@@ -135,6 +136,12 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     } else {
         console.log('Import Cravings button not found in DOMContentLoaded');
+    }
+
+    if (importShiftNotesBtn) {
+        importShiftNotesBtn.addEventListener('click', function() {
+            showShiftNotesModal();
+        });
     }
 
     // Also bind delete button here if present on initial load
@@ -150,11 +157,36 @@ document.addEventListener('DOMContentLoaded', function() {
                 clientList.innerHTML = '';
                 clientCount.textContent = '';
                 resultsCard.style.display = 'none';
+                document.querySelectorAll('.ai-status-badge').forEach(b => { b.textContent = 'AI: Not enhanced'; b.classList.remove('done'); });
             } catch (e) {
                 console.error('Delete data error:', e);
                 updateStatus('Failed to delete data.', 'error');
             }
         });
+    }
+
+    // Also bind Save in Kipu here if present on initial load
+    const saveInKipuBtn = document.getElementById('saveInKipuBtn');
+    if (saveInKipuBtn) {
+        console.log('Binding Save in Kipu (DOMContentLoaded)');
+        saveInKipuBtn.addEventListener('click', async function() {
+            console.log('Save in Kipu clicked');
+            try {
+                updateStatus('Opening Kipu to save completed clients...', 'info');
+                const completed = await getCompletedClientIds();
+                if (completed.length === 0) {
+                    updateStatus('No completed clients checked. Please check clients to save.', 'error');
+                    return;
+                }
+                await saveCompletedClientsInKipu(completed);
+                updateStatus('Save in Kipu initiated for completed clients.', 'success');
+            } catch (e) {
+                console.error('Save in Kipu error:', e);
+                updateStatus(`Save in Kipu failed: ${e.message}`, 'error');
+            }
+        });
+    } else {
+        console.log('Save in Kipu button not found at DOMContentLoaded');
     }
 
     // Initialize
@@ -169,6 +201,7 @@ function setupAIButtonListeners() {
     const enhanceBtn = document.getElementById('enhanceBtn');
     const settingsBtn = document.getElementById('settingsBtn');
     const deleteDataBtn = document.getElementById('deleteDataBtn');
+    const saveInKipuBtn = document.getElementById('saveInKipuBtn');
     const tooltip = document.getElementById('aiTooltip');
     const status = document.getElementById('status');
     
@@ -247,12 +280,16 @@ function renderClientList(data, clientListElement = null) {
     
     // Load completion status for all clients
     loadClientCompletionStatus(data, (completionStatus) => {
-        listElement.innerHTML = '';
-        data.forEach(client => {
+        chrome.storage.local.get(['aiEnhancedStatus'], function(r) {
+            const aiStatus = r.aiEnhancedStatus || {};
+            listElement.innerHTML = '';
+            data.forEach(client => {
             const isCompleted = completionStatus[client.patientId] || false;
+            const isAiDone = !!aiStatus[String(client.patientId)];
             
             const clientDiv = document.createElement('div');
             clientDiv.className = `client-item clickable ${isCompleted ? 'completed' : ''}`;
+            const aiBadgeHtml = `<span class=\"ai-status-badge ${isAiDone ? 'done' : ''}\" data-patient-id=\"${client.patientId}\">${isAiDone ? 'AI: Enhanced' : 'AI: Not enhanced'}</span>`;
             clientDiv.innerHTML = `
                 <div class="client-completion">
                     <input type="checkbox" 
@@ -263,7 +300,7 @@ function renderClientList(data, clientListElement = null) {
                     <label for="complete_${client.patientId}" class="completion-label">✓</label>
                 </div>
                 <div class="client-info">
-                    <div class="client-name">${client.name}</div>
+                    <div class="client-name">${client.name} ${aiBadgeHtml}</div>
                     <div class="client-details">ID: ${client.patientId} | P: ${client.p || 'N/A'}</div>
                 </div>
                 <div class="client-arrow">→</div>
@@ -297,6 +334,7 @@ function renderClientList(data, clientListElement = null) {
         });
         
         console.log(`Rendered ${data.length} clients to the list`); // Debug log
+        });
     });
 }
 
@@ -543,8 +581,18 @@ function createEvaluationForm(client, existingEvaluation = null) {
                 <div class="form-section">
                     <h3 class="section-title">DATA FROM THE DAY</h3>
                     
+                    <div class="day-swing-wrap">
+                        <div class="form-item">
+                            <label class="form-label">Day Shift Notes:</label>
+                            <textarea id="day_shift_notes" name="day_shift_notes" class="form-textarea" placeholder="Imported or manual entry for day shift..."></textarea>
+                        </div>
+                        <div class="form-item">
+                            <label class="form-label">Swing Shift Notes:</label>
+                            <textarea id="swing_shift_notes" name="swing_shift_notes" class="form-textarea" placeholder="Imported or manual entry for swing shift..."></textarea>
+                        </div>
+                    </div>
                     <div class="form-item">
-                        <label class="form-label">Milieu Engagement:</label>
+                        <label class="form-label">Milieu Engagement (final narrative):</label>
                         <textarea id="milieu_engagement" name="milieu_engagement" class="form-textarea large" placeholder="How the client showed up in the milieu. Were they hanging out with their peers, helping out with chores, isolating, aggressive with peers or staff, etc..."></textarea>
                     </div>
                 </div>
@@ -579,6 +627,23 @@ function createEvaluationForm(client, existingEvaluation = null) {
     // Auto-populate craving level from imported data if available
     autoPopulateCravingLevel(client);
     
+    // Auto-populate Day/Swing if imported shift notes exist
+    chrome.storage.local.get(['shiftNotesByFfr'], function(result) {
+        const notes = result.shiftNotesByFfr || {};
+        // derive ffrKey from client's p field
+        const m = String(client.p || '').toUpperCase().match(/FFR[\s-]*(\d{4})[\s-]*(\d{2,3})/);
+        if (m) {
+            const key = `FFR${m[1]}${m[2].padStart(3,'0')}`;
+            const entry = notes[key];
+            if (entry) {
+                const dayEl = document.getElementById('day_shift_notes');
+                const swingEl = document.getElementById('swing_shift_notes');
+                if (dayEl && entry.day) dayEl.value = entry.day;
+                if (swingEl && entry.swing) swingEl.value = entry.swing;
+            }
+        }
+    });
+
     // Populate form with existing data if available (this will override craving auto-population if evaluation exists)
     if (existingEvaluation && existingEvaluation.data) {
         populateFormWithExistingData(existingEvaluation.data);
@@ -750,6 +815,7 @@ async function handleAIEnhancement(button, statusElement) {
             try {
                 const shiftNote = await generateShiftNote(client);
                 await persistMilieuEngagementReplacement(client.patientId, shiftNote);
+                markClientAiEnhanced(client.patientId);
             } catch (err) {
                 console.error('Enhancement error for client', client, err);
             }
@@ -800,6 +866,402 @@ async function getCompletedClientsWithEvaluations() {
 
             resolve(completedClients);
         });
+    });
+}
+
+// Get just the completed client ids
+async function getCompletedClientIds() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(['clientCompletionStatus'], function(result) {
+            const completionStatus = result.clientCompletionStatus || {};
+            const ids = Object.keys(completionStatus).filter(id => completionStatus[id]).map(id => String(id));
+            resolve(ids);
+        });
+    });
+}
+
+// Save flow in Kipu: open each patient's records page and add a New Shift Note
+async function saveCompletedClientsInKipu(patientIds) {
+    for (let i = 0; i < patientIds.length; i++) {
+        const pid = patientIds[i];
+        const evaluationData = await getMostRecentEvaluationData(pid);
+        await openAndPrepareKipuShiftNote(pid, evaluationData || {});
+    }
+}
+
+async function getMostRecentEvaluationData(patientId) {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(null, function(result) {
+            const keys = Object.keys(result).filter(k => k.startsWith(`evaluation_${patientId}_`));
+            let latest = null, ts = 0;
+            keys.forEach(k => {
+                const ev = result[k];
+                const t = new Date(ev.timestamp).getTime();
+                if (t > ts) { ts = t; latest = ev; }
+            });
+            resolve(latest ? (latest.data || {}) : null);
+        });
+    });
+}
+
+async function openAndPrepareKipuShiftNote(patientId, evaluationData) {
+    // Open records page
+    const url = `https://foundrytreatmentcenter.kipuworks.com/patients/${patientId}/records?process=88`;
+    const tab = await chrome.tabs.create({ url });
+
+    // Wait for load
+    await new Promise((resolve) => {
+        const listener = (tabId, changeInfo, tabInfo) => {
+            if (tabId === tab.id && changeInfo.status === 'complete') {
+                chrome.tabs.onUpdated.removeListener(listener);
+                resolve();
+            }
+        };
+        chrome.tabs.onUpdated.addListener(listener);
+    });
+
+    // Click the robust Add form button
+    await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+            function tryClickAddForm() {
+                // Prefer exact name match element
+                const byName = document.querySelector('div.open-modal-cancel[name="addform"]');
+                if (byName) { byName.click(); return true; }
+                // Fallbacks by text and role
+                const candidates = Array.from(document.querySelectorAll('div,button,a')).filter(el => {
+                    const txt = (el.textContent || '').toLowerCase();
+                    return txt.includes('add form') || txt.trim() === 'add form';
+                });
+                if (candidates.length) { candidates[0].click(); return true; }
+                return false;
+            }
+            let attempts = 0;
+            const timer = setInterval(() => {
+                attempts++;
+                if (tryClickAddForm() || attempts > 15) clearInterval(timer);
+            }, 300);
+        }
+    });
+
+    // Wait, then click Add for "New Shift Note"
+    await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+            function clickAddForNewShiftNote() {
+                const dialog = document.querySelector('.ui-dialog .ui-dialog-content');
+                if (!dialog) return false;
+                const rows = Array.from(dialog.querySelectorAll('table.grid_index tr'));
+                for (const row of rows) {
+                    const label = (row.querySelector('td a.forms_app__add_patient_evaluation_link') || row.querySelector('td a'));
+                    if (!label) continue;
+                    const text = (label.textContent || '').toLowerCase();
+                    if (text.includes('new shift note')) {
+                        const addLink = row.querySelector('td a[href*="add_evaluation"]:not(.forms_app__add_patient_evaluation_link)') || row.querySelector('td a[href*="add_evaluation"]');
+                        if (addLink) { (addLink).click(); return true; }
+                    }
+                }
+                return false;
+            }
+            let attempts = 0;
+            const timer = setInterval(() => {
+                attempts++;
+                if (clickAddForNewShiftNote() || attempts > 20) clearInterval(timer);
+            }, 300);
+        }
+    });
+
+    // Finally, click the top open, undated New Shift Note link (with grace delay and retries)
+    await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+            function findAndClickUndated() {
+                const table = document.querySelector('table.grid_index');
+                if (!table) return false;
+                const links = Array.from(table.querySelectorAll('a.forms_app__edit_patient_evaluation_link'));
+                for (const a of links) {
+                    const label = (a.textContent || '').trim();
+                    if (label !== 'New Shift Note') continue;
+                    const row = a.closest('tr');
+                    if (!row) continue;
+                    const wrap = row.querySelector('[id^="patient_evaluation_status_"] .wrap');
+                    const smalls = wrap ? Array.from(wrap.querySelectorAll('.small')) : [];
+                    const status = (smalls[0] && smalls[0].textContent || '').trim().toLowerCase();
+                    const dateText = (smalls[1] && smalls[1].textContent || '').trim();
+                    const hasDate = /\d{2}\/\d{2}\/\d{4}/.test(dateText);
+                    if ((status === 'open' || status === '') && !hasDate) {
+                        a.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        // Try robust click variants
+                        try {
+                            a.click();
+                        } catch {}
+                        try {
+                            const evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                            a.dispatchEvent(evt);
+                        } catch {}
+                        // As a final fallback, navigate directly
+                        try {
+                            const href = a.getAttribute('href');
+                            if (href) {
+                                const abs = new URL(href, location.origin).href;
+                                setTimeout(() => { window.location.assign(abs); }, 150);
+                            }
+                        } catch {}
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            function tryClickAddInDialog() {
+                const dialog = document.querySelector('.ui-dialog .ui-dialog-content');
+                if (!dialog) return false;
+                const rows = Array.from(dialog.querySelectorAll('table.grid_index tr'));
+                for (const row of rows) {
+                    const nameLink = row.querySelector('td a.forms_app__add_patient_evaluation_link, td a');
+                    if (!nameLink) continue;
+                    const text = (nameLink.textContent || '').toLowerCase();
+                    if (text.includes('new shift note')) {
+                        const addLink = row.querySelector('td a[href*="add_evaluation"]');
+                        if (addLink) { addLink.click(); return true; }
+                    }
+                }
+                return false;
+            }
+
+            const start = Date.now();
+            const graceMs = 3000; // allow extra time for backend to create row
+            const maxMs = 45000;
+            const interval = setInterval(() => {
+                const elapsed = Date.now() - start;
+                if (elapsed < graceMs) return; // initial grace period
+
+                if (findAndClickUndated()) { clearInterval(interval); return; }
+
+                // If dialog still present, re-attempt clicking Add in the dialog
+                tryClickAddInDialog();
+
+                if (elapsed > maxMs) {
+                    clearInterval(interval);
+                }
+            }, 400);
+        }
+    });
+
+    // External fallback: poll from extension context, grab href and force navigate
+    const deadline = Date.now() + 45000;
+    while (Date.now() < deadline) {
+        const [{ result: href }] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+                const table = document.querySelector('table.grid_index');
+                if (!table) return null;
+                const links = Array.from(table.querySelectorAll('a.forms_app__edit_patient_evaluation_link'));
+                for (const a of links) {
+                    const label = (a.textContent || '').trim();
+                    if (label !== 'New Shift Note') continue;
+                    const row = a.closest('tr');
+                    if (!row) continue;
+                    const wrap = row.querySelector('[id^="patient_evaluation_status_"] .wrap');
+                    const smalls = wrap ? Array.from(wrap.querySelectorAll('.small')) : [];
+                    const status = (smalls[0] && smalls[0].textContent || '').trim().toLowerCase();
+                    const dateText = (smalls[1] && smalls[1].textContent || '').trim();
+                    const hasDate = /\d{2}\/\d{2}\/\d{4}/.test(dateText);
+                    if ((status === 'open' || status === '') && !hasDate) {
+                        const rel = a.getAttribute('href');
+                        if (rel) {
+                            try { return new URL(rel, location.origin).href; } catch { return rel; }
+                        }
+                    }
+                }
+                return null;
+            }
+        });
+        if (href) {
+            await chrome.tabs.update(tab.id, { url: href });
+            break;
+        }
+        await new Promise(r => setTimeout(r, 800));
+    }
+
+    // After page navigates to edit, inject evaluation data into the form and submit
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        args: [evaluationData],
+        func: (evalData) => {
+            function qs(sel) { return document.querySelector(sel); }
+            function qsa(sel) { return Array.from(document.querySelectorAll(sel)); }
+            function caseEq(a,b){ return (a||'').trim().toLowerCase() === (b||'').trim().toLowerCase(); }
+            function norm(s){ return (s||'').toString().replace(/\s+/g,' ').trim().toLowerCase(); }
+
+            // Find the form section container by its visible title text
+            function findItemByTitleContains(titleText) {
+                const tNorm = norm(titleText);
+                const items = qsa('.patient_evaluation_item');
+                for (const item of items) {
+                    const t = item.querySelector('.item_title');
+                    if (t && norm(t.textContent).includes(tNorm)) return item;
+                }
+                return null;
+            }
+
+            function setCheckboxByLabel(groupContainer, wantedLabels) {
+                if (!groupContainer || !Array.isArray(wantedLabels)) return;
+                const wraps = Array.from(groupContainer.querySelectorAll('.checkbox_list_wrap .wrap, .wrap'));
+                wraps.forEach(w => {
+                    const labelEl = w.querySelector('label');
+                    const input = w.querySelector('input[type="checkbox"]');
+                    if (!labelEl || !input) return;
+                    const text = (labelEl.textContent || '').replace(/\s+/g,' ').trim();
+                    if (wantedLabels.some(x => caseEq(x, text))) {
+                        if (!input.checked) {
+                            // Prefer click to trigger Kipu handlers
+                            try { input.click(); } catch { input.checked = true; }
+                        }
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                });
+            }
+
+            function setSingleCheckbox(container, value) {
+                if (!container) return;
+                const cb = container.querySelector('input[type="checkbox"]');
+                if (cb) {
+                    const desired = !!value;
+                    if (cb.checked !== desired) {
+                        try { cb.click(); } catch { cb.checked = desired; }
+                    }
+                    cb.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+
+            function setNoneCheckbox(container, shouldCheck) {
+                if (!container) return;
+                // Prefer the specific item_value checkbox within this item
+                const direct = container.querySelector('input[type="checkbox"][name*="patient_evaluation[patient_evaluation_items_attributes]"][name$="[item_value]"]');
+                if (direct) {
+                    const desired = !!shouldCheck;
+                    if (direct.checked !== desired) {
+                        try { direct.click(); } catch { direct.checked = desired; }
+                    }
+                    direct.dispatchEvent(new Event('change', { bubbles: true }));
+                    return;
+                }
+                // Fallback: find by label text containing "None"
+                const wraps = Array.from(container.querySelectorAll('.wrap, .mtop04'));
+                for (const w of wraps) {
+                    const label = w.querySelector('label');
+                    const input = w.querySelector('input[type="checkbox"]');
+                    if (!label || !input) continue;
+                    const text = (label.textContent || '').replace(/\s+/g,' ').trim().toLowerCase();
+                    if (text.includes('none')) {
+                        const desired = !!shouldCheck;
+                        if (input.checked !== desired) {
+                            try { input.click(); } catch { input.checked = desired; }
+                        }
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                        return;
+                    }
+                }
+            }
+
+            function setItemSubTextarea(container, text) {
+                if (!container || !text) return;
+                const sub = container.querySelector('[id^="patient_evaluation_item_sub_"]') || container;
+                const inline = sub.querySelector('[id$="_description_inline_target"]');
+                if (inline) inline.innerHTML = `<p>${String(text).replace(/</g,'&lt;').replace(/\n/g,'<br>')}</p>`;
+                const ta = sub.querySelector('textarea[name$="[description]"]');
+                if (ta) {
+                    ta.value = text;
+                    ta.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            }
+
+            function setTextareaByInlineTarget(inlineTargetId, textareaId, text) {
+                if (!text) return;
+                const inline = qs('#' + inlineTargetId);
+                if (inline) inline.innerHTML = `<p>${String(text).replace(/</g,'&lt;').replace(/\n/g,'<br>')}</p>`;
+                const ta = qs('#' + textareaId);
+                if (ta) {
+                    ta.value = text;
+                    ta.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            }
+
+            // PHYSICAL HEALTH: Med compliant
+            const medContainer = findItemByTitleContains('Client Compliant with Meds');
+            setSingleCheckbox(medContainer, !!evalData.med_compliant);
+            if (!evalData.med_compliant && evalData.med_compliant_textarea) {
+                setTextareaByInlineTarget('patient_evaluation_eval_texts_attributes_0_description_inline_target','patient_evaluation_eval_texts_attributes_0_description', evalData.med_compliant_textarea);
+            }
+
+            // Medical concerns
+            const concernsContainer = findItemByTitleContains('Client Voiced the Following Medical Concerns');
+            const noneConcerns = Array.isArray(evalData.medical_concerns) ? evalData.medical_concerns.includes('None') : !evalData.medical_concerns;
+            setNoneCheckbox(concernsContainer, noneConcerns);
+            if (!noneConcerns && evalData.no_concerns_textarea) {
+                setItemSubTextarea(concernsContainer, evalData.no_concerns_textarea);
+            }
+
+            // PRESENTATION groups
+            const mapGroups = [
+                { key: 'adls', title: 'adls' },
+                { key: 'appetite', title: 'appetite' },
+                { key: 'behavior', title: 'behavior' },
+                { key: 'thinking', title: 'thinking' },
+                { key: 'eye_contact', title: 'eye contact' },
+                { key: 'affect', title: 'affect' },
+                { key: 'mood', title: 'mood' },
+                { key: 'speech', title: 'speech' },
+                { key: 'orientation', title: 'orientation' },
+                { key: 'insight', title: 'insight' }
+            ];
+            mapGroups.forEach(g => {
+                const container = findItemByTitleContains(g.title);
+                const vals = evalData[g.key];
+                if (container && (Array.isArray(vals) || typeof vals === 'string')) {
+                    setCheckboxByLabel(container, Array.isArray(vals) ? vals : [vals]);
+                }
+            });
+
+            // RISK BEHAVIORS
+            const riskContainer = findItemByTitleContains('risk thoughts/behaviors');
+            if (riskContainer && evalData.risk_behaviors) setCheckboxByLabel(riskContainer, Array.isArray(evalData.risk_behaviors) ? evalData.risk_behaviors : [evalData.risk_behaviors]);
+            const addRiskContainer = findItemByTitleContains('additional information about risk thoughts');
+            const noneAddRisk = Array.isArray(evalData.additional_risk) ? evalData.additional_risk.includes('None') : !evalData.additional_risk;
+            setNoneCheckbox(addRiskContainer, noneAddRisk);
+            if (!noneAddRisk && evalData.no_additional_risk_textarea) {
+                setItemSubTextarea(addRiskContainer, evalData.no_additional_risk_textarea);
+            }
+
+            // WITHDRAWAL / PAW
+            const withdrawalContainer = findItemByTitleContains('withdrawal and detox symptoms');
+            if (withdrawalContainer && evalData.withdrawal) setCheckboxByLabel(withdrawalContainer, Array.isArray(evalData.withdrawal) ? evalData.withdrawal : [evalData.withdrawal]);
+            const pawContainer = findItemByTitleContains('paw symptoms');
+            if (pawContainer && evalData.paw_symptoms) setCheckboxByLabel(pawContainer, Array.isArray(evalData.paw_symptoms) ? evalData.paw_symptoms : [evalData.paw_symptoms]);
+
+            // Craving Level (1..10)
+            if (evalData.craving_level) {
+                const craveContainer = findItemByTitleContains('current craving level');
+                if (craveContainer) setCheckboxByLabel(craveContainer, [String(evalData.craving_level)]);
+            }
+
+            // Milieu engagement
+            if (evalData.milieu_engagement) {
+                setTextareaByInlineTarget('patient_evaluation_eval_texts_attributes_3_description_inline_target','patient_evaluation_eval_texts_attributes_3_description', evalData.milieu_engagement);
+            }
+
+            // Optionally pre-fill day/swing text areas for user reference (local form only)
+            // Note: These fields are not in Kipu form; they help build final narrative.
+
+            // Submit (optional: leave open for review) – for now just leave open
+            const submitBtn = document.getElementById('form_submit');
+            if (submitBtn) {
+                // Do not auto-submit to allow review; uncomment to submit automatically
+                // submitBtn.click();
+            }
+        }
     });
 }
 
@@ -887,6 +1349,27 @@ function formatEvaluationDataForAI(evaluationData) {
         summary.push('• No medical concerns reported');
     }
 
+    // Save in Kipu workflow
+    if (saveInKipuBtn) {
+        const newSaveBtn = saveInKipuBtn.cloneNode(true);
+        saveInKipuBtn.parentNode.replaceChild(newSaveBtn, saveInKipuBtn);
+        newSaveBtn.addEventListener('click', async function() {
+            try {
+                updateStatusMessage('Opening Kipu to save completed clients...', 'info', status);
+                const completed = await getCompletedClientIds();
+                if (completed.length === 0) {
+                    updateStatusMessage('No completed clients checked. Please check clients to save.', 'error', status);
+                    return;
+                }
+                await saveCompletedClientsInKipu(completed);
+                updateStatusMessage('Save in Kipu initiated for completed clients.', 'success', status);
+            } catch (e) {
+                console.error('Save in Kipu error:', e);
+                updateStatusMessage(`Save in Kipu failed: ${e.message}`, 'error', status);
+            }
+        });
+    }
+
     // Delete all client/evaluation data
     if (deleteDataBtn) {
         const newDeleteBtn = deleteDataBtn.cloneNode(true);
@@ -904,6 +1387,7 @@ function formatEvaluationDataForAI(evaluationData) {
                 if (clientCount) clientCount.textContent = '';
                 const resultsCard = document.getElementById('resultsCard');
                 if (resultsCard) resultsCard.style.display = 'none';
+                document.querySelectorAll('.ai-status-badge').forEach(b => { b.textContent = 'AI: Not enhanced'; b.classList.remove('done'); });
             } catch (e) {
                 console.error('Delete data error:', e);
                 updateStatusMessage('Failed to delete data.', 'error', status);
@@ -1004,6 +1488,9 @@ function handleFormSubmission(client) {
             dataObj[key] = value;
         }
     }
+    // Capture day/swing notes explicitly
+    dataObj.day_shift_notes = (document.getElementById('day_shift_notes') || {}).value || '';
+    dataObj.swing_shift_notes = (document.getElementById('swing_shift_notes') || {}).value || '';
     const evaluationData = {
         client: client,
         timestamp: new Date().toISOString(),
@@ -1057,6 +1544,7 @@ function restoreMainInterface() {
                         <span class="btn-text">🤖 Enhance with AI</span>
                         <span class="btn-loader" style="display: none;">⏳</span>
                     </button>
+                    <button id="saveInKipuBtn" class="btn primary">Save in Kipu</button>
                     <button id="settingsBtn" class="btn secondary">Settings</button>
                     <div id="aiTooltip" class="tooltip" style="display:none;">Input API key!</div>
                 </div>
@@ -1425,6 +1913,103 @@ function showCravingsModal() {
     setupCravingsModalListeners();
 }
 
+// Shift Notes import modal
+function showShiftNotesModal() {
+    const modal = document.getElementById('shiftNotesModal');
+    const textarea = document.getElementById('shiftNotesTextarea');
+    const statusDiv = document.getElementById('shiftNotesStatus');
+    if (!modal) return;
+    if (textarea) textarea.value = '';
+    if (statusDiv) { statusDiv.textContent = ''; statusDiv.className = 'status'; }
+    modal.style.display = 'block';
+    setupShiftNotesModalListeners();
+}
+
+function setupShiftNotesModalListeners() {
+    const modal = document.getElementById('shiftNotesModal');
+    const closeBtn = document.getElementById('closeShiftNotesModal');
+    const cancelBtn = document.getElementById('cancelShiftNotesBtn');
+    const parseBtn = document.getElementById('parseShiftNotesBtn');
+    const statusDiv = document.getElementById('shiftNotesStatus');
+
+    const closeModal = () => { if (modal) modal.style.display = 'none'; };
+    if (closeBtn) closeBtn.onclick = closeModal;
+    if (cancelBtn) cancelBtn.onclick = closeModal;
+    window.addEventListener('click', function (e) { if (e.target === modal) closeModal(); }, { once: true });
+
+    if (parseBtn) parseBtn.onclick = async function() {
+        const text = (document.getElementById('shiftNotesTextarea') || {}).value || '';
+        if (!text.trim()) { updateShiftNotesStatus('Please paste the shift notes text.', 'error'); return; }
+        try {
+            updateShiftNotesStatus('Parsing shift notes...', 'info');
+            const parsed = parseShiftNotesText(text);
+            await persistShiftNotes(parsed);
+            updateShiftNotesStatus(`Imported shift notes for ${Object.keys(parsed).length} clients.`, 'success');
+            setTimeout(closeModal, 1500);
+        } catch (e) {
+            console.error('Shift notes parse error:', e);
+            updateShiftNotesStatus(`Error: ${e.message}`, 'error');
+        }
+    };
+}
+
+function updateShiftNotesStatus(msg, type='info') {
+    const el = document.getElementById('shiftNotesStatus');
+    if (!el) return;
+    el.textContent = msg;
+    el.className = `status ${type}`;
+}
+
+// Parse example blob into { ffrKey: { day: string, swing: string } }
+function parseShiftNotesText(text) {
+    const lines = text.split(/\r?\n/);
+    const clientNotes = {}; // key: FFRYYYYNNN
+    let currentKey = null;
+    let collecting = null; // 'day' | 'swing'
+    function normalizeFFR(ffrRaw) {
+        const m = String(ffrRaw || '').toUpperCase().match(/F\s*F\s*R[\s-]*(\d{4})[\s-]*(\d{2,3})/);
+        if (!m) return null;
+        const year = m[1]; const last = m[2].padStart(3, '0');
+        return `FFR${year}${last}`;
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+        const line = (raw || '').trim();
+        // Detect client line with FFR
+        const f = line.match(/FFR[^\d]*(\d{4})[^\d]*(\d{2,3})/i) || line.match(/FRR[^\d]*(\d{4})[^\d]*(\d{2,3})/i);
+        if (f) {
+            const key = normalizeFFR(f[0]);
+            if (key) {
+                currentKey = key;
+                if (!clientNotes[currentKey]) clientNotes[currentKey] = { day: '', swing: '' };
+                collecting = null;
+                continue;
+            }
+        }
+        if (/^Day\s*:/.test(line)) { collecting = 'day'; const after = line.replace(/^Day\s*:\s*/,''); if (currentKey) clientNotes[currentKey].day += (after ? after + '\n' : ''); continue; }
+        if (/^Swing\s*:/.test(line)) { collecting = 'swing'; const after = line.replace(/^Swing\s*:\s*/,''); if (currentKey) clientNotes[currentKey].swing += (after ? after + '\n' : ''); continue; }
+        if (collecting && currentKey) {
+            clientNotes[currentKey][collecting] += line + '\n';
+        }
+    }
+    // Trim
+    Object.keys(clientNotes).forEach(k => {
+        clientNotes[k].day = clientNotes[k].day.trim();
+        clientNotes[k].swing = clientNotes[k].swing.trim();
+    });
+    return clientNotes;
+}
+
+async function persistShiftNotes(parsed) {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(['shiftNotesByFfr'], function(result) {
+            const existing = result.shiftNotesByFfr || {};
+            const merged = { ...existing, ...parsed };
+            chrome.storage.local.set({ shiftNotesByFfr: merged }, resolve);
+        });
+    });
+}
 // Set up event listeners for the cravings modal
 function setupCravingsModalListeners() {
     const modal = document.getElementById('cravingsModal');
@@ -1683,6 +2268,21 @@ function storeCravingData(matches) {
     });
 }
 
+// Mark a client as AI enhanced and update badge
+function markClientAiEnhanced(patientId) {
+    const badge = document.querySelector(`.ai-status-badge[data-patient-id="${patientId}"]`);
+    if (badge) {
+        badge.textContent = 'AI: Enhanced';
+        badge.classList.add('done');
+    }
+    // Persist optional flag
+    chrome.storage.local.get(['aiEnhancedStatus'], function(result) {
+        const status = result.aiEnhancedStatus || {};
+        status[String(patientId)] = true;
+        chrome.storage.local.set({ aiEnhancedStatus: status });
+    });
+}
+
 // Wipe all client list, evaluations, completion flags, AI settings (optional keep), and imported cravings
 async function wipeAllClientData() {
     return new Promise((resolve) => {
@@ -1696,13 +2296,17 @@ async function wipeAllClientData() {
             // Completion checkboxes
             if ('clientCompletionStatus' in all) keysToRemove.push('clientCompletionStatus');
 
-            // Imported cravings
+            // Imported cravings and shift notes
             if ('importedCravings' in all) keysToRemove.push('importedCravings');
+            if ('shiftNotesByFfr' in all) keysToRemove.push('shiftNotesByFfr');
 
             // Evaluations
             Object.keys(all).forEach(k => {
                 if (k.startsWith('evaluation_')) keysToRemove.push(k);
             });
+
+            // AI Enhanced status badges
+            if ('aiEnhancedStatus' in all) keysToRemove.push('aiEnhancedStatus');
 
             // Optionally keep OpenAI settings; comment next 2 lines if you want to delete
             // if ('openai_api_key' in all) keysToRemove.push('openai_api_key');

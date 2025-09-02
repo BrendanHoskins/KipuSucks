@@ -211,10 +211,7 @@ header p {
     color: #2c3e50;
 }
 
-.client-details {
-    font-size: 0.9rem;
-    color: #666;
-}
+.client-details { display: none; }
 
 .client-arrow {
     font-size: 1.2rem;
@@ -269,9 +266,19 @@ header p {
     color: #2e7d32;
 }
 
-.client-item.completed .client-details {
-    color: #388e3c;
+.client-item.completed .client-details { display: none; }
+
+.ai-status-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    font-size: 11px;
+    border-radius: 10px;
+    margin-left: 8px;
+    background: #e5e7eb;
+    color: #374151;
 }
+.ai-status-badge.done { background: #d1fae5; color: #065f46; }
+.ai-status-badge.pending { background: #fee2e2; color: #991b1b; }
 
 .client-item.completed.clickable:hover {
     background-color: #dcedc8;
@@ -659,6 +666,14 @@ header p {
     justify-content: flex-end;
     margin-top: 20px;
 }
+
+/* Day/Swing textareas in form */
+.day-swing-wrap {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+.day-swing-wrap .form-item { margin: 0; }
 
 .btn.danger {
     background: #c62828;
